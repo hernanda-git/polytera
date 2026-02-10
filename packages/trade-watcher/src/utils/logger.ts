@@ -21,28 +21,30 @@ export function getLogger(): pino.Logger {
     return _logger;
   }
 
-  // Optional: tee everything to a log file (same as CLI, plain text)
+  // Build stream destinations
   const streams: pino.StreamEntry[] = [];
 
-  // Console: pretty-printed (color in dev)
+  // Console: pretty-printed, writes directly to stdout
   const prettyConsole = pinoPretty({
     colorize: process.env.NODE_ENV !== 'production',
     translateTime: 'ISO',
+    destination: 1, // fd 1 = stdout — avoids double-write issues
   });
-  prettyConsole.pipe(process.stdout);
   streams.push({ stream: prettyConsole });
 
+  // Optional: tee to a log file (same content, no colors)
   if (logFile) {
     const dir = path.dirname(logFile);
     if (dir && !fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    const fileStream = fs.createWriteStream(logFile, { flags: 'a' });
     const prettyFile = pinoPretty({
       colorize: false,
       translateTime: 'ISO',
+      destination: logFile,
+      append: true,
+      mkdir: true,
     });
-    prettyFile.pipe(fileStream);
     streams.push({ stream: prettyFile });
   }
 

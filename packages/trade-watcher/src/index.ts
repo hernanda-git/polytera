@@ -1,14 +1,17 @@
 import { loadConfig } from './config/index.js';
 import { getDatabase, closeDatabase } from './store/database.js';
 import { EventStore } from './store/event-store.js';
+import { NormalizedStore } from './store/normalized-store.js';
 import { Deduplicator } from './dedup/deduplicator.js';
 import { OnChainWatcher } from './watchers/on-chain-watcher.js';
 import { ClobWatcher } from './watchers/clob-watcher.js';
 import { WatcherOrchestrator } from './watchers/watcher-orchestrator.js';
+import { SignalNormalizer } from './normalizer/index.js';
 import { startHealthServer, stopHealthServer } from './utils/health.js';
 import { getLogger } from './utils/logger.js';
-import { serializeEvent } from './types/index.js';
 import type { RawTradeEvent } from './types/index.js';
+import type { NormalizedTrade } from './normalizer/types.js';
+import { serializeNormalizedTrade } from './normalizer/types.js';
 
 // ─── Main ────────────────────────────────────────────────────────────────────
 
@@ -17,18 +20,22 @@ async function main(): Promise<void> {
   const log = getLogger();
 
   log.info('═══════════════════════════════════════════════════════');
-  log.info('  Polytera Trade Watcher — Starting');
+  log.info('  Polytera Trade Watcher + Signal Normalizer — Starting');
   log.info('═══════════════════════════════════════════════════════');
   log.info({ expertAddress: config.expertAddress }, 'Target expert');
 
-  // ── Database & Store ───────────────────────────────────────────────
+  // ── Database & Stores ──────────────────────────────────────────────
   const db = getDatabase(config.env.DB_PATH);
   const eventStore = new EventStore(db);
+  const normalizedStore = new NormalizedStore(db);
   const deduplicator = new Deduplicator(eventStore);
 
   log.info(
-    { existingEvents: eventStore.getEventCount() },
-    'Event store initialized'
+    {
+      rawEvents: eventStore.getEventCount(),
+      normalizedEvents: normalizedStore.getCount(),
+    },
+    'Stores initialized'
   );
 
   // ── Watchers ───────────────────────────────────────────────────────
@@ -51,31 +58,47 @@ async function main(): Promise<void> {
     deduplicator,
   });
 
-  // ── Shadow Mode Output ─────────────────────────────────────────────
-  // In shadow mode, we log every detected trade to console.
-  // When the Signal Normalizer module is built, this becomes the
-  // integration point: orchestrator.on('trade', signalNormalizer.process)
-  orchestrator.on('trade', (event: RawTradeEvent) => {
-    const serialized = serializeEvent(event);
-    log.info(
-      {
-        trade: {
-          id: serialized.id,
-          source: serialized.source,
-          exchange: serialized.exchange,
-          expertSide: serialized.expertSide,
-          maker: serialized.maker,
-          taker: serialized.taker,
-          makerAssetId: serialized.makerAssetId,
-          takerAssetId: serialized.takerAssetId,
-          makerAmountFilled: serialized.makerAmountFilled,
-          takerAmountFilled: serialized.takerAmountFilled,
-          blockNumber: serialized.blockNumber,
-          txHash: serialized.txHash,
+  // ── Signal Normalizer ──────────────────────────────────────────────
+  const normalizer = new SignalNormalizer({
+    expertAddress: config.expertAddress,
+  });
+
+  // Wire: raw trade -> normalize -> persist -> log
+  orchestrator.on('trade', async (event: RawTradeEvent) => {
+    const normalized = await normalizer.normalize(event);
+
+    if (normalized) {
+      // Persist for auditing
+      normalizedStore.insert(normalized);
+
+      // Shadow mode: log the enriched trade
+      const serialized = serializeNormalizedTrade(normalized);
+      log.info(
+        {
+          trade: {
+            id: serialized.expertTradeId,
+            market: serialized.marketQuestion,
+            outcome: serialized.outcome,
+            side: serialized.side,
+            price: serialized.price,
+            quantity: serialized.quantity,
+            impliedProbability: serialized.impliedProbability,
+            phase: serialized.marketPhase,
+            positionBefore: serialized.expertPositionBefore,
+            positionAfter: serialized.expertPositionAfter,
+            liquidity: serialized.liquiditySnapshot,
+            latencyMs: serialized.normalizationLatencyMs,
+            txHash: serialized.txHash,
+          },
         },
-      },
-      '🔔 SHADOW MODE — Expert trade detected'
-    );
+        'SHADOW MODE — Normalized expert trade'
+      );
+    }
+  });
+
+  // Forward the normalized event for future Context Analyzer module
+  normalizer.on('normalized', (_normalized: NormalizedTrade) => {
+    // Integration point: contextAnalyzer.analyze(normalized)
   });
 
   orchestrator.on('error', (error: Error, watcherName: string) => {
@@ -91,7 +114,7 @@ async function main(): Promise<void> {
   const health = orchestrator.getHealth();
   log.info(
     { status: health.status, watchers: health.watchers.map((w) => `${w.name}:${w.state}`) },
-    'Trade Watcher is live'
+    'System is live'
   );
 
   // ── Graceful Shutdown ──────────────────────────────────────────────
@@ -113,7 +136,6 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 
-  // Keep the process alive
   process.on('uncaughtException', (err) => {
     log.fatal({ err }, 'Uncaught exception');
     shutdown('uncaughtException');

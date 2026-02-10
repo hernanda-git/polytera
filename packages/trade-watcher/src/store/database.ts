@@ -82,6 +82,35 @@ function runMigrations(db: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_raw_events_processed_at
       ON raw_events(processed_at);
+
+    -- Signal Normalizer: normalized trade events
+    CREATE TABLE IF NOT EXISTS normalized_events (
+      expert_trade_id       TEXT PRIMARY KEY,
+      tx_hash               TEXT NOT NULL,
+      timestamp             INTEGER NOT NULL,
+      detected_at           INTEGER NOT NULL,
+      market_id             TEXT NOT NULL,
+      market_question       TEXT NOT NULL,
+      outcome               TEXT NOT NULL,
+      side                  TEXT NOT NULL CHECK(side IN ('BUY', 'SELL')),
+      quantity              REAL NOT NULL,
+      price                 REAL NOT NULL,
+      implied_probability   REAL NOT NULL,
+      market_phase          TEXT NOT NULL CHECK(market_phase IN ('early', 'mid', 'late', 'near_resolution')),
+      liquidity_snapshot    TEXT NOT NULL,
+      expert_position_before REAL NOT NULL,
+      expert_position_after  REAL NOT NULL,
+      normalization_latency_ms INTEGER NOT NULL,
+      raw_event_id          TEXT NOT NULL,
+      created_at            INTEGER NOT NULL DEFAULT (unixepoch()),
+      FOREIGN KEY (raw_event_id) REFERENCES raw_events(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_normalized_events_market_id
+      ON normalized_events(market_id);
+
+    CREATE INDEX IF NOT EXISTS idx_normalized_events_timestamp
+      ON normalized_events(timestamp);
   `);
 
   log.debug('Migrations applied');

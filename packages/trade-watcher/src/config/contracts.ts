@@ -76,7 +76,10 @@ export const ORDER_FILLED_ABI = [
 export const POLYGON_CHAIN_ID = 137;
 
 /**
- * Maximum block range per getLogs request (Polygon RPC providers typically
- * support up to 10 000 blocks per query).
+ * Maximum block range per getLogs request.
+ *
+ * Alchemy Free tier limits eth_getLogs to 10 blocks per request.
+ * If you upgrade to Alchemy PAYG or use a different provider, you can
+ * increase this to 2_000n or higher for faster backfills.
  */
-export const MAX_BLOCK_RANGE = 5_000n;
+export const MAX_BLOCK_RANGE = 10n;

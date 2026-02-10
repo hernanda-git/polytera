@@ -129,3 +129,13 @@ export function deserializeEvent(row: SerializedRawTradeEvent): RawTradeEvent {
 export function buildEventId(txHash: string, logIndex: number): string {
   return `${txHash}-${logIndex}`;
 }
+
+// ─── Re-exports from Signal Normalizer ───────────────────────────────────────
+
+export type {
+  NormalizedTrade,
+  LiquiditySnapshot,
+  MarketPhase,
+  MarketMetadata,
+  SerializedNormalizedTrade,
+} from '../normalizer/types.js';
